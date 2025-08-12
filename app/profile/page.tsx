@@ -1,16 +1,13 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Send, Trash2, StopCircle, Settings2, Bot, User } from "lucide-react"
-
+import { Send, StopCircle, Bot, User } from "lucide-react"
 import { Card, CardContent, CardFooter } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel } from "@/components/ui/dropdown-menu"
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 type ChatRole = "user" | "assistant"
 type Message = {
@@ -39,7 +36,7 @@ export default function ProfilePage() {
     const [messages, setMessages] = useState<Message[]>([DEFAULT_WELCOME])
     const [input, setInput] = useState("")
     const [isStreaming, setIsStreaming] = useState(false)
-    const [model, setModel] = useState("gpt-4o-mini")
+    const [sessionId, setSessionId] = useState<string>("")
 
     const endRef = useRef<HTMLDivElement | null>(null)
 
@@ -49,7 +46,11 @@ export default function ProfilePage() {
 
     const canSend = useMemo(() => input.trim().length > 0 && !isStreaming, [input, isStreaming])
 
-    function handleSend() {
+    useEffect(() => {
+        setSessionId(typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now()))
+    }, [])
+
+    async function handleSend() {
         if (!canSend) return
         const userMessage: Message = {
             id: generateId(),
@@ -60,15 +61,43 @@ export default function ProfilePage() {
         setMessages((prev) => [...prev, userMessage])
         setInput("")
 
-        // Placeholder de integração: mostre um estado de "gerando" até conectar seu backend/IA
         setIsStreaming(true)
-        const placeholder: Message = {
-            id: generateId(),
-            role: "assistant",
-            content: "Waiting for server response…",
-            createdAt: Date.now(),
+
+        try {
+            const res = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: userMessage.content, sessionId }),
+            })
+
+            if (!res.ok || !res.body) throw new Error('Request failed')
+
+            const reader = res.body.getReader()
+            const decoder = new TextDecoder()
+            let assistantText = ""
+
+            // placeholder assistant
+            const assistantId = generateId()
+            setMessages((prev) => [...prev, { id: assistantId, role: 'assistant', content: '', createdAt: Date.now() }])
+
+            // consume text stream
+            while (true) {
+                const { value, done } = await reader.read()
+                if (done) break
+                const chunk = decoder.decode(value, { stream: true })
+                assistantText += chunk
+                setMessages((prev) => {
+                    const copy = [...prev]
+                    const idx = copy.findIndex((m) => m.id === assistantId)
+                    if (idx !== -1) copy[idx] = { ...copy[idx], content: assistantText }
+                    return copy
+                })
+            }
+        } catch (e) {
+            setMessages((prev) => [...prev, { id: generateId(), role: 'assistant', content: 'Erro ao gerar resposta.', createdAt: Date.now() }])
+        } finally {
+            setIsStreaming(false)
         }
-        setMessages((prev) => [...prev, placeholder])
     }
 
     function handleStop() {
@@ -100,11 +129,11 @@ export default function ProfilePage() {
     }
 
     return (
-        <div className="flex h-full w-full flex-col">
-            <Card className="flex h-full min-h-0 flex-col rounded-none border-0">
+        <div className="flex h-dvh w-full flex-col">
+            <Card className="flex flex-1 min-h-0 flex-col rounded-none border-0">
                 <CardContent className="min-h-0 flex-1 p-0">
                     <ScrollArea className="h-full">
-                        <div className="flex flex-col gap-6 p-4 md:p-6">
+                        <div className="flex flex-col gap-6 p-4 pb-36 md:p-6">
                             {messages.map((m) => (
                                 <ChatMessage key={m.id} message={m} />
                             ))}
@@ -113,8 +142,8 @@ export default function ProfilePage() {
                     </ScrollArea>
                 </CardContent>
 
-                <CardFooter className="border-t">
-                    <div className="flex w-full flex-col gap-2">
+                <CardFooter className="relative sticky bottom-0 z-20 border-t-0 bg-transparent p-4 backdrop-blur-lg supports-[backdrop-filter]:bg-background/20 before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-6 before:bg-gradient-to-t before:from-background/60 before:to-transparent">
+                    <div className="w-full max-w-3xl mx-auto rounded-2xl border border-border/40 bg-background/60 shadow-lg p-2">
                         <div className="flex items-end gap-2">
                             <Textarea
                                 value={input}
@@ -122,13 +151,13 @@ export default function ProfilePage() {
                                 onKeyDown={onKeyDown}
                                 placeholder={isStreaming ? "Generating response…" : "Type your message here…"}
                                 disabled={isStreaming}
-                                className="max-h-40 min-h-16 resize-y"
+                                className="min-h-12 max-h-24 resize-none bg-transparent border-0 focus-visible:ring-0"
                             />
 
                             {isStreaming ? (
                                 <Tooltip>
                                     <TooltipTrigger asChild>
-                                        <Button variant="secondary" size="lg" onClick={handleStop}>
+                                        <Button variant="secondary" size="icon" className="shrink-0" onClick={handleStop}>
                                             <StopCircle className="size-5" />
                                         </Button>
                                     </TooltipTrigger>
@@ -138,7 +167,7 @@ export default function ProfilePage() {
                                 <Tooltip>
                                     <TooltipTrigger asChild>
                                         <span>
-                                            <Button size="lg" onClick={handleSend} disabled={!canSend}>
+                                            <Button size="icon" className="shrink-0" onClick={handleSend} disabled={!canSend}>
                                                 <Send className="size-5" />
                                             </Button>
                                         </span>
